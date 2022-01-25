@@ -2,9 +2,18 @@ import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Conv2D, Lambda, Add, LeakyReLU,  \
                                     MaxPooling2D, concatenate, UpSampling2D,\
-                                    Multiply, ZeroPadding2D, Cropping2D
+                                    Multiply, ZeroPadding2D, Cropping2D,    \
+                                    Concatenate
 
 
+def reduce_dimension(image):
+    #convert complex reconstruction into single channel image
+    # get real and imaginary portions
+    real = Lambda(lambda image: image[:, :, :, 0])(image)
+    imag = Lambda(lambda image: image[:, :, :, 1])(image)
+
+    rec = tf.expand_dims(tf.math.abs(tf.math.add(real,imag)),-1)
+    return rec
 
 def fft_layer(image):
     # get real and imaginary portions
@@ -153,7 +162,7 @@ def DC_block(rec,mask,sampled_kspace,channels,kspace = False):
     rec_kspace_dc = Add()([rec_kspace_dc,sampled_kspace])
     return rec_kspace_dc
 
-def deep_cascade_flat_unrolled(depth_str = 'ikikii', H=256,W=256,depth = 5,kshape = (3,3), nf = 48,channels = 2):
+def deep_cascade_flat_unrolled(depth_str = 'ikikii', H=256,W=256,Hpad=3,Wpad=3,depth = 5,kshape = (3,3), nf = 48,channels = 2):
     """
     :param depth_str: string that determines the depth of the cascade and the domain of each
     subnetwork
@@ -164,9 +173,9 @@ def deep_cascade_flat_unrolled(depth_str = 'ikikii', H=256,W=256,depth = 5,kshap
     :return: Deep Cascade Flat Unrolled model
     """
 
-    inputs = Input(shape=(H,W,channels))
-    inputs2 = Input(shape=(H,W,1))
-    mask = Input(shape=(H,W,channels))
+    inputs = Input(shape=(H,W,channels)) #kspace zero_flled_rec
+    inputs2 = Input(shape=(H,W,1))       #reconstruction for previous scan
+    mask = Input(shape=(H,W,channels))   #under sampling masks for zero_filled`
     layers = [inputs]
     kspace_flag = True
     for ii in depth_str:
@@ -177,16 +186,20 @@ def deep_cascade_flat_unrolled(depth_str = 'ikikii', H=256,W=256,depth = 5,kshap
             kspace_flag = False
         # Add CNN block
         layers.append(cnn_block(layers[-1],depth,nf,kshape,channels))
-
         # Add DC block
         layers.append(DC_block(layers[-1],mask,inputs,channels,kspace=kspace_flag))
         kspace_flag = True
 
     layers.append(Lambda(ifft_layer)(layers[-1]))
-    layers.append(unet_block(layers[-1], channels=1))
+    layers.append(Lambda(reduce_dimension)(layers[-1]))
+    layers.append(Concatenate(axis=-1)([inputs2,layers[-1]]))
 
-    out = DC_block(layers[-1],mask,inputs,channels,kspace=kspace_flag)
-    out2 = Add()([out, inputs2])
+    layers.append(ZeroPadding2D(padding=(Hpad,Wpad))(layers[-1]))
+    layers.append(unet_block(layers[-1], channels=1))
+    layers.append(Cropping2D(cropping=(Hpad,Wpad))(layers[-1]))
+
+    out = Add()([layers[-1], inputs2])
+    out2 = DC_block(out,mask,inputs,channels,kspace=kspace_flag)
 
     model = Model(inputs=[inputs,inputs2,mask], outputs=out2)
     return model
