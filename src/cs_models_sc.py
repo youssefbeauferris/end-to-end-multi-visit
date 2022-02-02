@@ -5,6 +5,39 @@ from tensorflow.keras.layers import Input, Conv2D, Lambda, Add, LeakyReLU,  \
                                     Multiply, ZeroPadding2D, Cropping2D,    \
                                     Concatenate
 
+def abs_layer(complex_data):
+    """
+    Input: 2-channel array representing complex data
+    Output: 1-channel array representing magnitude of complex data
+    """
+    #get real and imaginary portions
+    real = Lambda(lambda complex_data : complex_data[:,:,:,0])(complex_data)
+    imag = Lambda(lambda complex_data : complex_data[:,:,:,1])(complex_data)
+
+    mag = tf.abs(tf.complex(real,imag))
+    mag = tf.expand_dims(mag, -1)
+    return mag
+
+
+def phase_layer(complex_data):
+    """
+    Input: 2-channel array representing complex data
+    Output: 1-channel array representing magnitude of complex data
+    """
+    #get real and imaginary portions
+    real = Lambda(lambda complex_data : complex_data[:,:,:,0])(complex_data)
+    imag = Lambda(lambda complex_data : complex_data[:,:,:,1])(complex_data)
+
+    ph = tf.math.atan2(imag,real)
+    ph = tf.expand_dims(ph, -1)
+    return ph
+
+
+def polar2cartesian(ph,mag):
+    real = mag*tf.math.cos(ph)
+    imag = mag*tf.math.sin(ph)
+    image_complex_2channel = tf.concat([real, imag], -1)
+    return image_complex_2channel
 
 def reduce_dimension(image):
     #convert complex reconstruction into single channel image
@@ -191,17 +224,18 @@ def deep_cascade_flat_unrolled(depth_str = 'ikikii', H=256,W=256,Hpad=3,Wpad=3,d
         kspace_flag = True
 
     layers.append(Lambda(ifft_layer)(layers[-1]))
-    layers.append(Lambda(reduce_dimension)(layers[-1]))
-    layers.append(Concatenate(axis=-1)([inputs2,layers[-1]]))
+    mag = Lambda(abs_layer)(layers[-1])
+    ph = Lambda(phase_layer)(layers[-1])
+    layers.append(tf.concat([mag,inputs2], -1))
 
-    layers.append(ZeroPadding2D(padding=(Hpad,Wpad))(layers[-1]))
-    layers.append(unet_block(layers[-1], channels=1))
-    layers.append(Cropping2D(cropping=(Hpad,Wpad))(layers[-1]))
+    layers.append(unet_block(layers[-1], channels=2))
+    out = Add()([layers[-1], mag])
+    out1 = polar2cartesian(ph,out)
+    
+    out2 = DC_block(out1,mask,inputs,channels,kspace=False)
+    out3 = abs_layer(out2)
 
-    out = Add()([layers[-1], inputs2])
-    out2 = DC_block(out,mask,inputs,channels,kspace=kspace_flag)
-
-    model = Model(inputs=[inputs,inputs2,mask], outputs=out2)
+    model = Model(inputs=[inputs,inputs2,mask], outputs=out3)
     return model
 
 def deep_cascade_unet(depth_str='ki', H=218, W=170, Hpad = 3, Wpad = 3, kshape=(3, 3),channels = 22):
