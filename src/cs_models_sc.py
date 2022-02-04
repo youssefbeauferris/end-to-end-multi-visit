@@ -235,7 +235,7 @@ def deep_cascade_flat_unrolled(depth_str = 'ikikii', H=256,W=256,Hpad=3,Wpad=3,d
     out2 = DC_block(out1,mask,inputs,channels,kspace=False)
     out3 = abs_layer(out2)
 
-    model = Model(inputs=[inputs,inputs2,mask], outputs=out3)
+    model = Model(inputs=[inputs,inputs2,mask], outputs=[mag,out3])
     return model
 
 def deep_cascade_unet(depth_str='ki', H=218, W=170, Hpad = 3, Wpad = 3, kshape=(3, 3),channels = 22):
