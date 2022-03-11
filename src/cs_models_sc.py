@@ -63,6 +63,15 @@ def fft_layer(image):
     return kspace
 
 
+def slice_channel(array_2channel):
+    #get real and imaginary portions
+    array_1channel = Lambda(lambda array_2channel : array_2channel[:,:,:,0])(array_2channel)
+
+    array_1channel = tf.expand_dims(array_1channel, -1)
+
+    return array_1channel
+
+
 def ifft_layer(kspace_2channel):
     #get real and imaginary portions
     real = Lambda(lambda kspace_2channel : kspace_2channel[:,:,:,0])(kspace_2channel)
@@ -140,7 +149,7 @@ def unet_block(unet_input, kshape=(3, 3),channels = 2):
     conv7 = Conv2D(48, kshape, activation='relu', padding='same')(conv7)
 
     conv8 = Conv2D(channels, (1, 1), activation='linear')(conv7)
-    out = Add()([conv8, unet_input])
+    out = Add()([conv8, slice_channel(unet_input)])
     return out
 
 def unet_block2(unet_input, kshape=(3, 3),channels = 2):
@@ -195,7 +204,38 @@ def DC_block(rec,mask,sampled_kspace,channels,kspace = False):
     rec_kspace_dc = Add()([rec_kspace_dc,sampled_kspace])
     return rec_kspace_dc
 
-def deep_cascade_flat_unrolled(depth_str = 'ikikii', H=256,W=256,Hpad=3,Wpad=3,depth = 5,kshape = (3,3), nf = 48,channels = 2):
+def deep_cascade_flat_unrolled(depth_str = 'ikikii', H=256,W=256,depth = 5,kshape = (3,3), nf = 48,channels = 2):
+    """
+    :param depth_str: string that determines the depth of the cascade and the domain of each
+    subnetwork
+    :param H: Image heigh
+    :param W: Image width
+    :param kshape: Kernel size
+    :param nf: number of filters in each convolutional layer
+    :return: Deep Cascade Flat Unrolled model
+    """
+
+    inputs = Input(shape=(H,W,channels))
+    mask = Input(shape=(H,W,channels))
+    layers = [inputs]
+    kspace_flag = True
+    for ii in depth_str:
+
+        if ii =='i':
+            # Add IFFT
+            layers.append(Lambda(ifft_layer)(layers[-1]))
+            kspace_flag = False
+        # Add CNN block
+        layers.append(cnn_block(layers[-1],depth,nf,kshape,channels))
+
+        # Add DC block
+        layers.append(DC_block(layers[-1],mask,inputs,channels,kspace=kspace_flag))
+        kspace_flag = True
+    out = Lambda(ifft_layer)(layers[-1])
+    model = Model(inputs=[inputs,mask], outputs=out)
+    return model
+
+def deep_cascade_flat_unrolled_end(depth_str = 'ikikii', H=256,W=256,Hpad=3,Wpad=3,depth = 5,kshape = (3,3), nf = 48,channels = 2):
     """
     :param depth_str: string that determines the depth of the cascade and the domain of each
     subnetwork
@@ -227,16 +267,18 @@ def deep_cascade_flat_unrolled(depth_str = 'ikikii', H=256,W=256,Hpad=3,Wpad=3,d
     mag = Lambda(abs_layer)(layers[-1])
     ph = Lambda(phase_layer)(layers[-1])
     layers.append(tf.concat([mag,inputs2], -1))
+    layers.append(unet_block(layers[-1], channels=1))
 
-    layers.append(unet_block(layers[-1], channels=2))
     out = Add()([layers[-1], mag])
     out1 = polar2cartesian(ph,out)
-    
     out2 = DC_block(out1,mask,inputs,channels,kspace=False)
-    out3 = abs_layer(out2)
+    out3 = Lambda(ifft_layer)(out2)
+    out4 = abs_layer(out3)
 
-    model = Model(inputs=[inputs,inputs2,mask], outputs=[mag,out3])
+    model = Model(inputs=[inputs,inputs2,mask], outputs=[mag,out4])
     return model
+
+
 
 def deep_cascade_unet(depth_str='ki', H=218, W=170, Hpad = 3, Wpad = 3, kshape=(3, 3),channels = 22):
 
